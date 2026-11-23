@@ -1,0 +1,36 @@
+# Starts the Minecraft servers at boot one at a time (via the depends_on chain
+# in compose.yaml) instead of letting the Docker daemon start them all at once.
+#
+# Template unit: the instance name is the user that owns the deployment, e.g.
+# minecraft@alice.service runs as alice from ~alice/minecraft-java-hosting.
+#
+# How: ExecStop runs `docker compose stop` at shutdown, which marks the
+# containers as manually stopped, so Docker's `unless-stopped` policy does not
+# start them when the daemon comes back. ExecStart then starts them in order.
+# Crash restarts are still handled by `restart: unless-stopped`.
+# After a power loss (no clean shutdown) Docker may still start them together.
+#
+# Install on the host, as the deploying user (see README):
+#   sudo cp ~/minecraft-java-hosting/systemd/minecraft@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable "minecraft@$USER.service"
+[Unit]
+Description=Minecraft servers for %i (Docker Compose, staggered start)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=%i
+# "~" is the home directory of User=.
+WorkingDirectory=~
+ExecStart=/usr/bin/docker compose -f minecraft-java-hosting/compose.yaml up -d --wait --wait-timeout 1800
+ExecStop=/usr/bin/docker compose -f minecraft-java-hosting/compose.yaml stop
+TimeoutStartSec=infinity
+# Servers stop one after another, each with up to 90s (vanilla) or 2 min
+# (Cobblemon) to save: worst case 10 min, plus headroom.
+TimeoutStopSec=15min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+# Local settings (see .env.example), loaded by direnv via .envrc.
+.env
+.direnv/

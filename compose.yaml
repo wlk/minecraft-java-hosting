@@ -1,0 +1,190 @@
+---
+# All Minecraft Java servers on the host, managed as one Compose project.
+#
+# Data for each server lives at ${DATA_ROOT}/<service-name>
+# (default: ~/minecraft-data/<service-name>), mounted as /data.
+#
+# Servers start one at a time: each waits until the previous one is healthy
+# (or has failed), so `docker compose up -d` never boots all JVMs at once.
+# Order: minecraft-przetrwanie -> minecraft-kreatywny -> redstone -> pvp
+#        -> coblemon-przetrwanie -> coblemon-kreatywny
+#
+# Usage:
+#   docker compose up -d                       # start everything, in order
+#   docker compose up -d --no-deps pvp         # start one server only
+#   docker compose logs -f redstone            # follow logs
+#   docker compose exec pvp rcon-cli           # server console
+
+name: minecraft
+
+x-server: &server
+  tty: true
+  stdin_open: true
+  restart: unless-stopped
+  # The image waits up to 60s (STOP_DURATION) for the world save on shutdown;
+  # leave headroom before Docker sends SIGKILL.
+  stop_grace_period: 90s
+  # Extends the image's own `mc-health` check: probe every 5s while starting
+  # so the next server in the chain starts as soon as this one is up, and
+  # allow 5 minutes for slow starts (version downloads, mod installs).
+  healthcheck:
+    start_period: 5m
+    start_interval: 5s
+  # Docker's json-file driver never rotates by default.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Environment shared by every server. Merge into a service with `<<: *env`.
+x-env: &env
+  EULA: "TRUE"
+  USE_AIKAR_FLAGS: "true"
+  # Six JVMs share one host, so don't pin every heap in RAM:
+  # - Aikar's preset pre-touches the whole heap at boot; JVM_OPTS comes after
+  #   the Aikar flags on the java command line, so this turns it back off.
+  # - Periodic G1 GC every 5 min returns unused heap (down to INIT_MEMORY)
+  #   to the OS when a server is idle.
+  JVM_OPTS: "-XX:-AlwaysPreTouch -XX:G1PeriodicGCInterval=300000"
+
+# Start after the named server is healthy. `required: false` means a server
+# that crashes or never gets healthy delays the chain instead of blocking it.
+x-after: &after
+  condition: service_healthy
+  required: false
+
+services:
+  minecraft-przetrwanie:
+    <<: *server
+    image: itzg/minecraft-server:latest
+    ports:
+      - "25565:25565"
+    environment:
+      <<: *env
+      INIT_MEMORY: "1G"
+      MAX_MEMORY: "2G"
+      MOTD: "Tryb przetrwania"
+      MODE: "0"  # 0 = survival, 1 = creative, 2 = adventure
+      TZ: "Europe/Warsaw"
+      DIFFICULTY: "easy"
+      FORCE_GAMEMODE: "true"
+      VIEW_DISTANCE: "13"
+      LEVEL: "przetrwanie"
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/minecraft-przetrwanie:/data
+
+  minecraft-kreatywny:
+    <<: *server
+    image: itzg/minecraft-server:latest
+    depends_on:
+      minecraft-przetrwanie: *after
+    ports:
+      - "25566:25565"
+    environment:
+      <<: *env
+      INIT_MEMORY: "1G"
+      MAX_MEMORY: "2G"
+      MOTD: "Tryb kreatywny"
+      MODE: "0"  # 0 = survival, 1 = creative, 2 = adventure
+      TZ: "Europe/Warsaw"
+      FORCE_GAMEMODE: "true"
+      VIEW_DISTANCE: "13"
+      LEVEL: "kreatywny"
+      SPAWN_MONSTERS: "false"
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/minecraft-kreatywny:/data
+
+  redstone:
+    <<: *server
+    image: itzg/minecraft-server:latest
+    depends_on:
+      minecraft-kreatywny: *after
+    ports:
+      - "25570:25565"
+    environment:
+      <<: *env
+      INIT_MEMORY: "1G"
+      MAX_MEMORY: "2G"
+      MOTD: "Redstone"
+      MODE: "1"  # 0 = survival, 1 = creative, 2 = adventure
+      TZ: "Europe/Warsaw"
+      FORCE_GAMEMODE: "true"
+      VIEW_DISTANCE: "13"
+      LEVEL: "kreatywny"
+      SPAWN_MONSTERS: "false"
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/redstone:/data
+
+  pvp:
+    <<: *server
+    image: itzg/minecraft-server:latest
+    depends_on:
+      redstone: *after
+    ports:
+      - "25581:25565"
+    environment:
+      <<: *env
+      INIT_MEMORY: "1G"
+      MAX_MEMORY: "2G"
+      MOTD: "Tryb PvP"
+      MODE: "0"  # 0 = survival, 1 = creative, 2 = adventure
+      TZ: "Europe/Warsaw"
+      DIFFICULTY: "normal"
+      FORCE_GAMEMODE: "true"
+      PVP: "true"
+      SPAWN_PROTECTION: "0"  # players can fight and build right at spawn
+      ALLOW_FLIGHT: "false"
+      VIEW_DISTANCE: "10"  # lower: fast PvP movement needs more server CPU
+      LEVEL: "pvp"
+      SPAWN_MONSTERS: "true"  # "false" for pure player-vs-player
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/pvp:/data
+
+  coblemon-przetrwanie:
+    <<: *server
+    image: itzg/minecraft-server:java21
+    stop_grace_period: 2m  # modded world saves take longer
+    depends_on:
+      pvp: *after
+    ports:
+      - "25567:25565"
+    environment:
+      <<: *env
+      TYPE: "FABRIC"
+      VERSION: "1.21.1"
+      INIT_MEMORY: "2G"
+      MAX_MEMORY: "5G"
+      MOTD: "Tryb przetrwania"
+      MODE: "0"  # 0 = survival, 1 = creative, 2 = adventure
+      MODRINTH_PROJECTS: "cobblemon"
+      MODRINTH_DOWNLOAD_DEPENDENCIES: "required"
+      # Only used when generating a new world.
+      # Previous seed: -5672066340366196282
+      SEED: "363050407777632563"
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/coblemon-przetrwanie:/data
+
+  coblemon-kreatywny:
+    <<: *server
+    image: itzg/minecraft-server:java21
+    stop_grace_period: 2m  # modded world saves take longer
+    depends_on:
+      coblemon-przetrwanie: *after
+    ports:
+      - "25568:25565"
+    environment:
+      <<: *env
+      TYPE: "FABRIC"
+      VERSION: "1.21.1"
+      INIT_MEMORY: "2G"
+      MAX_MEMORY: "5G"
+      MOTD: "Tryb kreatywny"
+      MODE: "1"  # 0 = survival, 1 = creative, 2 = adventure
+      MODRINTH_PROJECTS: "cobblemon"
+      MODRINTH_DOWNLOAD_DEPENDENCIES: "required"
+      # Only used when generating a new world.
+      # Previous seed: -5672066340366196282
+      SEED: "363050407777632563"
+    volumes:
+      - ${DATA_ROOT:-~/minecraft-data}/coblemon-kreatywny:/data

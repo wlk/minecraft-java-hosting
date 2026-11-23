@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Test double for `ssh`: runs the "remote" command locally inside
+# $FAKE_REMOTE_HOME and logs it to $STUB_LOG. Works for direct calls
+# (`ssh host 'cmd'`) and as rsync's transport (`ssh [opts] host rsync --server ...`).
+#
+# Knobs:
+#   STUB_UNREACHABLE  when set, every connection fails with exit 255
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -l | -p | -o | -i | -e) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+host="$1"
+shift
+echo "ssh $host $*" >>"$STUB_LOG"
+
+if [[ -n "${STUB_UNREACHABLE:-}" ]]; then
+  echo "ssh: connect to host $host: Connection refused" >&2
+  exit 255
+fi
+cd "$FAKE_REMOTE_HOME" || exit 255
+exec bash -c "$*"
