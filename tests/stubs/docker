@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Test double for `docker`. Logs every call to $STUB_LOG and fakes the
+# compose subcommands the scripts use.
+#
+# Knobs:
+#   STUB_RUNNING    services printed by `compose ps --services --status running`
+#   STUB_PLAYERS    player count reported by `rcon-cli list` (default 0)
+#   STUB_PULL_EXIT  exit code of `compose pull` (default 0)
+#   STUB_UP_EXIT    exit code of `compose up` (default 0)
+echo "docker $*" >>"$STUB_LOG"
+
+[[ "${1:-}" == compose ]] || exit 0
+shift
+args="$*"
+
+if [[ "$args" == "config --format json" ]]; then
+  echo '{"services":{}}'
+elif [[ "$args" == "ps --services --status running" ]]; then
+  # shellcheck disable=SC2086 # one service per word is intended
+  printf '%s\n' ${STUB_RUNNING:-}
+elif [[ "$args" == *"rcon-cli list"* ]]; then
+  echo "There are ${STUB_PLAYERS:-0} of a max of 20 players online: "
+elif [[ "$args" == pull* ]]; then
+  exit "${STUB_PULL_EXIT:-0}"
+elif [[ "$args" == up* ]]; then
+  exit "${STUB_UP_EXIT:-0}"
+fi
+exit 0
